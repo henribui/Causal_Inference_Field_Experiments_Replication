@@ -1,0 +1,354 @@
+---
+title: "**Evaluation of Labor Policy**"
+subtitle: "Field Experiments"
+author: "Henri Bui"
+date: "March 4th 2026"
+output: html_document
+  # html_document:
+  #   theme: sandstone
+  #   highlight: tango
+  # pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(fixest)
+library(ggplot2)
+library(lmtest)
+library(sandwich)
+
+
+# free the working memory
+rm(list = ls())
+
+
+# set seed
+set.seed(1234)
+
+# import the data in an object called 'data'
+data <- read.csv("data1.csv")
+```
+
+<br>
+
+## 1. Descriptive evidence
+
+**a. Create two versions of “dropped out by end of year 2” and compare them to `dropout`**
+<br>
+Reading the paper we found the visits that were annouced and unannounced: 
+<br>
+Announced: V0, V1, V4
+<br>
+Unannounced: V2, V3, V5, V6
+<br>
+Dropped out during the visit: v2_status
+```{r new variable dropout, include=TRUE}
+
+# Now let's create the first variable "dropped out by end of the second year" that takes value 1 if the student dropped out during any of the unannounced visits.
+
+# Version 1: dropped out in any unannounced visit
+# Create variable: dropout_unannounced
+
+#Here, we check whether during the unannounced visits, that is, V2, V3, V5, and V6, the corresponding vX_status was equal to 2, that is, dropped out. 
+
+data <- data %>%
+  mutate(dropout_unannounced =  if_else( #we add a new column, with 1 if the student dropped out
+    (v2_status == 2 |
+       v3_status== 2|
+       v5_status == 2|
+       v6_status == 2), 
+    1, 0)
+    )
+
+# Version 2: dropped out in any announced visit
+# Create variable: dropout_announced
+
+#We do the same thing as above, but for announced visits. 
+
+data <- data %>%
+  mutate(dropout_announced =  if_else( #we add a new column, with 1 if the student dropped out
+    (v0_status == 2 |
+       v1_status== 2|
+       v4_status == 2), 
+    1, 0)
+    )
+
+# Compare each with provided dropout variable (hint: table())
+
+
+```
+
+Comparing the unannounced visits with dropout: 
+
+```{r}
+#We create a confusion matrix in order to check which visits were correctly identitified, which weren't, etc.  
+tab_unannounced <- table(Unannounced = data$dropout_unannounced, 
+                         Dropout = data$dropout)
+
+rownames(tab_unannounced) <- c("0", "1")
+colnames(tab_unannounced) <- c("0", "1")
+
+
+tab_unannounced
+```
+24743 : correctly classified non-dropouts
+1401 : correctly classified dropouts
+3738 : official dropout = 1, but unannounced variable says 0 (missed dropouts)
+306 : unannounced variable says dropout, but official says no (false positives)
+
+From this result, we can see that most of the students that were classified as dropouts in the unannounced variable, acutally turned out to be dropouts, that is there were 306 false positives, but also 1401 have been correctly classified. 
+
+Comparing the announced visits with dropout: 
+```{r}
+#Again, we create a confusion matrix
+tab_announced <- table(Anounced = data$dropout_announced, 
+                       Dropout = data$dropout)
+
+rownames(tab_announced) <- c("0", "1")
+colnames(tab_announced) <- c("0", "1")
+
+tab_announced
+```
+37008 : correctly classified non-dropouts
+994 : correctly classified dropouts
+5735 : official dropout = 1, but announced variable says 0 (missed dropouts)
+994 : announced variable says dropout, but official says no (false positives)
+
+For the announced variable, however, there were only 994 correctly classified dropouts, whereby 5735 dropouts were missed. We can see that the announced variable is less accurate than the unannounced variable when comparing them to the official dropout
+
+Disclaimer: We included v0, but since in v0 everyone is enrolled, as that is when the data was first collected it doesn't affect our results. 
+
+<br>
+
+**b. Create a categorical variable called `treatment`**
+
+```{r new variable treatment, include=TRUE}
+
+# treatment:
+# 0 if control == 1
+# 1 if uncond_pere == 1
+# 2 if uncond_mere == 1
+# 3 if cond_pere == 1
+# 4 if cond_mere == 1
+
+data <- data %>%   
+  mutate( 
+    treatment = case_when( # we add a new column for the categorical variable "treatment"
+      control == 1 ~ 0,  # if the following condition is equal to 1, that is, if it is true, the value is assigned, here, if the student is in the control group, its value in "treatment" is 0.
+      uncond_pere == 1 ~ 1,
+      uncond_mere == 1 ~ 2, 
+      cond_pere == 1 ~ 3,
+      cond_mere == 1 ~ 4
+    )
+  )
+```
+
+<br>
+
+**c. Focus on LCT to fathers (`uncond_pere == 1`) and control. Produce a bar plot of mean `moved_y0_y2` and mean `dropout` by group. What do you conclude?**
+
+```{r bar plot, include=TRUE}
+# We will only take the Labeled Cash Transfers to fathers and will thus restrict our sample, that is when uncond_pere is equal to 1.
+
+plot_data <- data %>% # we create a separate dataset for plotting the graph
+  filter(control == 1 | uncond_pere == 1) %>% #we keep only the control group and LCT to fathers group 
+  mutate(group = if_else(control == 1, "Control", "LCT Father"))
+
+# we ow compute the means 
+means <- plot_data %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_moved = mean(moved_y0_y2, na.rm = TRUE), #compute the average probability of moving school 
+    mean_dropout = mean(dropout, na.rm = TRUE) #compute the avergae probability of dropping out 
+  ) %>%
+  pivot_longer(cols = c(mean_moved, mean_dropout), #we reshape into long format
+               names_to = "variable",
+               values_to = "mean")
+
+#We label the two groups in the treatment variable
+means$treatment <- factor(means$treatment, 
+                              levels = c(0, 1),
+                              labels = c("Control", "LCT fathers"))
+
+#we create the plot
+ggplot(means, aes(x = variable, y = mean, fill = treatment)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Means of moved and dropout by group",
+       x = "Variable", y = "Mean",
+       fill = "Group") +
+  scale_x_discrete(labels = c("mean_dropout" = "Dropout by Year 2",
+                               "mean_moved"   = "Moved Y0-Y2")) +
+  theme_minimal()
+```
+
+<br>
+
+This graph shows the average probability of moving out and the average probability of dropping out for both the control and treatment groups, that is for LCTs to fathers. We expect the causal effect between dropouts and father's LCTs to be negative as an increase in LCT to fathers appears to decrease the probability of children dropping out. This is reflected in the graph.  
+<br>
+<br>
+
+## 2. Validity checks
+<br>
+Use only students in grades 1 through 3 at baseline.
+<br>
+
+**a. Main threats to identification**
+<br>
+1. There exists the problem of attrition, which can be a threat to causal identification, since it might be the case that within the sample one group, so either the control or treatment, has disproportionately more values missing for the dropout variable, then the estimated effect is affected by attrition. For example, if people in the treatment group have a lot of dropout values missing compared to the control, then the data could show a inaccurately low dropout rate for the treated group, even if that is not the case in reality.
+
+2. By restricting the sample size to grades 1-3, we increase the probability that there are differences between the control and the sample by pure coincidence. These difference will then be reflected in the result. For example, if people in that particular grade 1 cohort happen to be more than usual by coincidence, the average age of the sample will be lower, whereby younger students are less likely to drop out. This could then be observed in the treatment effect, although it was not actually due to the treatment. 
+
+<br>
+
+**b. Descriptive table**
+<br>
+Produce a table with means for control (column 1) and LCT-father (column 2) for:
+- age at baseline
+- gender
+- missing info on dropout by year 2
+
+```{r balancing check table, echo=TRUE}
+#Here, we restrict our sample to grades 1 to 3, and within that only to controls and LCT to fathers
+data_sub <- data %>%
+  filter(v1_grade %in% c(1, 2, 3)) %>%
+  filter(control == 1 | uncond_pere == 1)
+
+#We create a variable for missing info on dropout by year 2
+data_sub <- data_sub %>%
+  mutate(missing_dropout = if_else(is.na(dropout), 1, 0))
+
+#adding labels 
+data_sub <- data_sub %>%
+  mutate(group = if_else(control == 1, "Control", "LCT Father"))
+
+#here, we compute the group means for both groups for age, gener and missing info
+table_balancing <- data_sub %>%
+  group_by(group) %>%
+  summarise(
+    Age = mean(age_2008, na.rm = TRUE),
+    Gender = mean(gender, na.rm = TRUE),
+    Missing_Dropout = mean(missing_dropout, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#we want the 3 variables as the rows, and the two groups as columns 
+table_balancing_wide <- table_balancing %>%
+  pivot_longer(
+    cols = -group,
+    names_to = "Variable",
+    values_to = "Mean"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = Mean
+  )
+
+table_balancing_wide
+
+```
+<br>
+
+
+So from the table we can see that students in grades 1-3 are on average 8.8 years old in both groups. The gender is also roughly the same in both groups at 1.43-1.44. For the missing dropout information by year 2, there is a difference of around 2%, whereby there are less missing info in the treatment group. 
+<br>
+
+**c. Test differences**
+<br>
+We regress each of the baseline indicators on LCT father, so that the resulting coefficient can show the difference in the means between LCT father and the control.
+```{r differences, echo=TRUE}
+
+summary(lm(age_2008 ~ uncond_pere, data = data_sub))
+
+```
+<br>
+The difference between the treatment and control for the variable age is not statistically significant at a p-value of 0.4835.
+<br>
+```{r}
+summary(lm(gender ~ uncond_pere, data = data_sub))
+```
+<br>
+The difference between the treatment and control for the variable gender is not statistically significant at a p-value of 0.804.
+<br>
+
+```{r}
+summary(lm(missing_info_dropout_y2 ~ uncond_pere, data = data_sub))
+```
+<br>
+The difference between the treatment and control for the variable missing_info_dropout_y2 is statistically significant at a p-value of 0.0001484.
+
+From these results we can conclude that for age and gender, the randomization of the control and treatment group is to be trusted, because the difference between both groups is not statistically significant. For the variable missing_info_dropout_y2 however, the difference is statistically significant, which means that there is more dropout information missing for the control group. This leads to the risk of attrition, as there are significantly more values missing for one group. One way of addressing attrition in this case is using bounds. 
+<br>
+<br>
+## 3. Causal effect estimation
+<br>
+Use the first three outcomes of Panel B of Table 5 in the paper.
+The first three outcomes are: 
+<br>
+1. Dropped out by end of year 2 
+<br>
+2. Dropped out during year 1 
+<br>
+3. Dropped out during year 2
+<br>
+<br>
+**a. Estimate the following model**
+<br>
+\[
+Y_{i,j} = \alpha + \beta_2 LCTmother_j + \beta_3 CCTfather_j + \beta_4 CCTmother_j + \epsilon_{i,j}
+\]
+
+In this model we are comparing the four different treatment groups, that is, LCT to fathers and mothers, and CCT to to fathers and mothers. So thus, is the dropout different depending on the treatment, for the three different outcomes outlined in panel B of table 5.
+
+```{r}
+#here, we take out the control group, so the regression only includes the treatment groups
+data_filter <- data %>%
+  filter(control != 1)   
+
+#dropout by the end of year 2 and in grades 1-4 at baseline
+reg1 <- lm(dropout_g14 ~ uncond_mere + cond_pere + cond_mere, data = data_filter)  
+
+#dropout during year 1 and in grades 1-4 at baseline
+reg2 <- lm(dropout_g14_y1 ~ uncond_mere + cond_pere + cond_mere, data = data_filter)  
+
+#dropout during year 2 and in grades 1-4 at baseline
+reg3 <- lm(dropout_g14_y2 ~ uncond_mere + cond_pere + cond_mere, data = data_filter)  
+```
+
+
+
+Why is $LCTfather_j$ excluded from the model? What does this imply for interpretation?
+
+LCT father excluded from this model because we are doing a regression with group dummies, so we have to pick one group as the baseline group, which in our case is LCT father. We are avoiding the dummy variable trap, i.e. to avoid perfect multicollinearity. Thus, for the interpretation, all results will be relative to the LCT father group. That means, that we are trying to find out the differences of the other groups compared to the LCT father group. 
+
+**b. What is the economic significance of these results? What do you conclude regarding the effectiveness of Labeled Cash Transfers?**
+
+```{r effects wo_covariates, echo=TRUE}
+
+summary(reg1)
+
+```
+<br>
+This is the regression for students that dropout by the end of year 2 and are in grades 1-4 at baseline. The intercept is 0.021277, which is the dropout rate in year 1 for LCT fathers. So, this means that the baseline dropout rate for LCT father is approximately 2.13%, and this result is statistically significant. Furthermore, there exists a statistically significant difference between LCT mother and LCT father, and the difference is 0.023178, i.e. 2.3% difference. This means that the dropout rate for LCT father is approximately 2.3% lower compared to LCT mother, that is for students that dropout by the end of year 2 and are in grades 1-4 at baseline.
+<br>
+
+```{r}
+summary(reg2)
+```
+<br>
+This is the regression for students that dropout during year 1 and in grades 1-4 at baseline. The intercept is 0.0043869, which is the dropout rate in year 1 for LCT fathers. So, this means that the baseline dropout rate for LCT father is approximately 0.44%, and this result is statistically significant. Furthermore, there exists a statistically significant difference between CCT mother and LCT father, and the difference is -0.0022475, i.e. -0.22% difference. This means that the dropout rate for CCT mother is approximately 0.22% lower compared to LCT father, that is for students that dropout during year 1 and in grades 1-4 at baseline.
+<br>
+```{r}
+summary(reg3)
+```
+<br>
+This is the regression for students that dropout during year 2 and in grades 1-4 at baseline. The intercept is 0.016964, which is the dropout rate in year 2 for LCT fathers. So, this means that the baseline dropout rate for LCT father is approximately 1.7%, and this result is statistically significant. Furthermore, there exists a statistically significant difference between LCT mother and LCT father, and the difference is 0.024114, i.e. 2.4% difference. This means that the dropout rate for LCT father is approximately 2.4% lower compared to LCT mother, that is for students that dropout during year 2 and in grades 1-4 at baseline.
+
+From this, we can conclude that dropout rate is around 2.3% higher if the LCT is given to mothers instead of fathers. This is significant. It implies that LCT should be given to fathers instead of mothers, as it works better in reducing dropout rates. 
+
+For CCT, the difference is small, but significant nevertheless, therein it suggests that CCT mother is slightly worse at reducing dropout rates than LCT father. 
+
+
