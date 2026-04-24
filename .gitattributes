@@ -2,3 +2,4 @@
 *.html linguist-detectable=false
 *.Rmd linguist-detectable=true
 *.Rmd linguist-language=R
+*.html linguist-vendored=true
